@@ -1,0 +1,381 @@
+---
+title: 'Project : Explore and Prepare Data'
+output:
+  html_notebook: default
+  html_document: default
+  pdf_document: default
+---
+
+## Data
+
+> The file [`movies_merged`](https://s3.amazonaws.com/content.udacity-data.com/courses/gt-cs6242/project/movies_merged) contains a dataframe with the same name that has 40K rows and 39 columns. Each row represents a movie title and each column represents a descriptor such as `Title`, `Actors`, and `Budget`. 
+
+## Load data
+
+```{r}
+load('movies_merged')
+```
+
+This creates an object of the same name (`movies_merged`).
+
+```{r}
+df = movies_merged
+cat("Dataset has", dim(df)[1], "rows and", dim(df)[2], "columns", end="\n", file="")
+colnames(df)
+```
+
+## Load R packages
+
+
+```{r}
+library(ggplot2)
+library(GGally)
+library(plyr)
+library(reshape2)
+library(stringr)
+library(gridExtra)
+```
+
+## 1. Remove non-movie rows
+
+The variable `Type` captures whether the row is a movie, a TV series, or a game. Remove all rows from `df` that do not correspond to movies.
+
+```{r}
+# TODO: Remove all rows from df that do not correspond to movies
+df=df[df$Type=='movie',]
+dim(df)[1]
+```
+
+
+## 2. Process `Runtime` column
+
+The variable `Runtime` represents the length of the title as a string. Convert it to a numeric value (in minutes) and replace `df$Runtime` with the new numeric column.
+
+```{r}
+# TODO: Replace df$Runtime with a numeric column containing the runtime in minutes
+change_runtime_to_num  <- function (min){
+    if (min!='N/A') {
+      return(as.numeric(unlist(strsplit(min,' '))[1]))
+    }
+    else {
+      return(NA)
+    }
+}
+df$Runtime <- sapply(df$Runtime,change_runtime_to_num)
+```
+
+
+```{r}
+# TODO: Investigate the distribution of Runtime values and how it varies by Year and Budget
+ggplot(df[!is.na(df$Runtime)& !is.na(df$Budget),],aes(x=Runtime,y=..density..))+
+  geom_histogram(bins=45,color=I('white'),fill=I('red'),alpha=0.7)+
+  facet_grid(cut(Year,breaks=c(1887,1977,2012,2018),
+                 labels = c('1887-1976','1977-2011','2012-2018'))~
+               cut(Budget,breaks = 
+                     c(min(Budget)-1,quantile(Budget,0.5),quantile(Budget,0.8)
+                       ,max(Budget)),labels=c('1K-18M','18M-50M','50M-425M')))+
+  geom_density() +
+  ylab('Density')+
+  ggtitle('Distribution of Runtime by Year and Budget')
+```
+
+
+## 3. Encode `Genre` column
+
+
+```{r}
+# TODO: Replace Genre with a collection of binary columns
+genre_list <- list()
+for (string in df$Genre) {
+  string=str_replace_all(string,' ','')
+  genre_vector=unlist(strsplit(string,split=','))
+  for (each in genre_vector) {
+    if (each =='N/A') {
+      next
+    }
+    else if (each %in% names(genre_list)) {
+      genre_list[[each]]=genre_list[[each]]+1
+    }else {
+      genre_list[[each]] = 0 
+    }
+  }
+}
+genre_binary_list <- list()
+for (string in df$Genre) {
+  string <- str_replace_all(string,' ','')
+  genre_vector <- unlist(strsplit(string,split=','))
+  for (type in names(genre_list)) {
+    if (type %in% genre_vector) {
+      genre_binary_list[type] <- list(c(genre_binary_list[[type]],1))
+    }else {
+      genre_binary_list[type] <- list(c(genre_binary_list[[type]],0))
+    }
+  } 
+}
+genre_binary_df <- data.frame(genre_binary_list)
+df <- cbind(df,genre_binary_df)
+df$Genre <- NULL
+genre_df <- data.frame('Type'=names(genre_binary_df),
+                       'Numbers'=as.vector(unlist(genre_list)))
+```
+
+Plot the relative proportions of movies having the top 10 most common genres.
+
+```{r}
+# TODO: Select movies from top 10 most common genres and plot their relative proportions
+#Calculate Proportion
+genre_df$Proportion <- genre_df$Numbers/dim(df)[1]
+#Plot Proportion
+ggplot(genre_df[order(genre_df$Numbers,decreasing = T),][1:10,],
+       aes(x=reorder(Type,Proportion),y=Proportion)) +
+  geom_bar(stat="identity",fill=I('red'),alpha=0.7) +
+  coord_flip() +
+  xlab('Movie Genre')+
+  ylab('Relative Proportion')
+```
+
+Examine how the distribution of `Runtime` changes across genres for the top 10 most common genres.
+
+```{r}
+# TODO: Plot Runtime distribution for top 10 most common genres
+for (each in genre_df[order(genre_df$Numbers,decreasing = T),][1:10,'Type']) {
+  print(ggplot(df[df[,each]==1,],aes(Runtime)) +
+    geom_histogram(bins=45,fill=I('blue'),alpha=0.6,color=I('white')) +
+    ggtitle(paste('Runtime',each)))
+}
+```
+
+
+## 4. Eliminate mismatched rows
+
+The dataframe was put together by merging two different sources of data and it is possible that the merging process was inaccurate in some cases (the merge was done based on movie title, but there are cases of different movies with the same title). The first source's release time was represented by the column `Year` (numeric representation of the year) and the second by the column `Released` (string representation of release date).
+
+
+```{r}
+# TODO: Remove rows with Released-Year mismatch
+released_year <- function(date) {
+  if (!is.na(date)) 
+    return(as.numeric(substring(date,1,4)))
+   else 
+    return(NA)
+}
+df$Released.Year <- sapply(df$Released,released_year) 
+matched_fuc <- function(each_row) {
+  yr1=each_row[['Year']]
+  yr2=each_row[['Released.Year']]
+  gap_yr=as.numeric(yr1)-as.numeric(yr2)
+  if (is.na(gap_yr))
+    return(1)
+  else if(abs(gap_yr) <=1)
+    return(1)
+  else 
+    return(0)
+}
+df$Matched  <- apply(df,1,matched_fuc)
+df <- df[df$Matched==1,]
+print(dim(df)[1])
+```
+
+
+## 5. Explore `Gross` revenue
+
+For the commercial success of a movie, production houses want to maximize Gross revenue. Investigate if Gross revenue is related to Budget, Runtime or Genre in any way.
+
+
+```{r}
+# TODO: Investigate if Gross Revenue is related to Budget, Runtime or Genre
+Top_Genres <- genre_df[order(genre_df$Numbers,decreasing = T),][1:10,'Type']
+Less_common_Genres <- genre_df[order(genre_df$Numbers,decreasing = T),][11:28,'Type']
+df_q5 <- df[!is.na(df$Budget) & !is.na(df$Gross) & !is.na(df$Runtime),
+            c('Runtime','Budget','Gross')]
+df_q5$Genre <- 
+apply(df[!is.na(df$Budget) & !is.na(df$Gross) & !is.na(df$Runtime),
+        as.vector(Top_Genres)],1,sum) >=
+apply(df[!is.na(df$Budget) & !is.na(df$Gross) & !is.na(df$Runtime),
+           as.vector(Less_common_Genres)],1,sum)
+
+df_q5$Genre <- sapply(df_q5$Genre,
+                      function(x) if (x==TRUE) 'Most Common' else 'Less Common')
+ggplot(df_q5,aes(Budget^(1/6),Gross^(1/6))) +
+  geom_point(alpha=0.7,color=I('red'))+
+  facet_grid(Genre~
+             cut(Runtime,
+                 breaks = c(min(Runtime)-1,quantile(Runtime,0.1),
+                            quantile(Runtime,0.4),quantile(Runtime,0.7),
+                            quantile(Runtime,0.9),max(Runtime))))+
+  geom_line(stat='smooth',method='loess')+
+  ggtitle('Gross Revenue is related to Budget, Runtime and Genre')
+
+ggplot(df[df$Documentary==1 & !is.na(df$Budget) &!is.na(df$Gross) & !is.na(df$Runtime),],
+       aes(Budget^(1/4),Gross^(1/4))) +
+  geom_point(aes(color=
+                   cut(Runtime,
+                       breaks = c(min(Runtime)-1,quantile(Runtime,0.1),
+                                  quantile(Runtime,0.7),max(Runtime))))) +
+  scale_color_discrete('Runtime') +
+  ggtitle('Documentary Genre')
+```
+
+
+```{r}
+# TODO: Investigate if Gross Revenue is related to Release Month
+released_month <- function(date) {
+  if (!is.na(date)) 
+    return(as.numeric(substring(date,6,7)))
+  else 
+    return(NA)
+}
+df$Released.Month <- sapply(df$Released,released_month) 
+
+ggplot(df[!is.na(df$Released.Month),],
+       aes(cut(Released.Month,breaks = c(0,4,7,10,12),
+           labels=c('Jan-Apr','May-Jul','Aug-Oct','Nov-Dec')),
+           Gross)) +
+  geom_boxplot() +
+  coord_flip()+
+  xlab('Month')
+```
+
+## 6. Process `Awards` column
+
+The variable `Awards` describes nominations and awards in text format. Convert it to 2 numeric columns, the first capturing the number of wins, and the second capturing nominations. Replace the `Awards` column with these new columns, and then study the relationship of `Gross` revenue with respect to them.
+
+
+```{r}
+# TODO: Convert Awards to 2 numeric columns: wins and nominations
+convert_awards_win <- function(awards_string) {
+  win=0
+  awards_string=gsub(' ','',awards_string)
+  if (grepl('won',awards_string,ignore.case=T)) {
+    pos=regexec('won([0-9]+)',awards_string,ignore.case=T)
+    win=win+as.numeric(regmatches(awards_string,pos)[[1]][2])
+  }
+  if (grepl('win',awards_string,ignore.case=T)) {
+    pos=regexec('([0-9]+)win',awards_string,ignore.case=T)
+    win=win+as.numeric(regmatches(awards_string,pos)[[1]][2])
+  }
+  return(win)
+}
+convert_awards_nom <- function(awards_string) {
+  nom=0
+  awards_string=gsub(' ','',awards_string)
+  if (grepl('nominatedfor',awards_string,ignore.case=T)){
+    pos=regexec('nominatedfor([0-9]+)',awards_string,ignore.case=T)
+    nom=nom+as.numeric(regmatches(awards_string,pos)[[1]][2])
+  }
+  if (grepl('nomination',awards_string,ignore.case=T)) {
+    pos=regexec('([0-9]+)nomination',awards_string,ignore.case=T)
+    nom=nom+as.numeric(regmatches(awards_string,pos)[[1]][2])
+  }
+  return(nom)
+}
+
+df$Wins <- sapply(df$Awards,convert_awards_win)
+df$Nominations <- sapply(df$Awards,convert_awards_nom)
+df$Awards <- NULL
+print(dim(df[df$Wins!=0 | df$Nominations!=0,])[1])
+```
+
+
+```{r}
+# TODO: Plot Gross revenue against wins and nominations
+ggplot(df,aes(sqrt(Nominations),sqrt(Gross))) +
+  geom_point(color=I('#FF6347')) +
+  geom_smooth(method = 'glm',se=FALSE)
+ggplot(df,aes(sqrt(Wins),sqrt(Gross))) +
+  geom_point(color=I('#FF6347')) +
+  geom_smooth(method = 'glm',se=FALSE)
+```
+
+
+
+## 7. Movie ratings from IMDb and Rotten Tomatoes
+
+There are several variables that describe ratings, including IMDb ratings (`imdbRating` represents average user ratings and `imdbVotes` represents the number of user ratings), and multiple Rotten Tomatoes ratings (represented by several variables pre-fixed by `tomato`). 
+
+Investigate the pairwise relationships between these different descriptors using graphs.
+
+```{r}
+# TODO: Illustrate how ratings from IMDb and Rotten Tomatoes are related
+df$tomatoMeter.Percentage <- df$tomatoMeter/100
+ggpairs(df[,c('imdbRating','tomatoMeter.Percentage','tomatoRating')],
+        mapping = ggplot2::aes(alpha=0.8))
+```
+
+
+## 8. Ratings and awards
+
+These ratings typically reflect the general appeal of the movie to the public or gather opinions from a larger body of critics. Whereas awards are given by professional societies that may evaluate a movie on specific attributes, such as artistic performance, screenplay, sound design, etc.
+
+Study the relationship between ratings and awards using graphs (awards here refers to wins and/or nominations). 
+
+```{r}
+# TODO: Show how ratings and awards are related
+plot.imdb.win <- ggplot(df,aes(imdbRating,Wins)) +
+  geom_point(color=I('#EE2C2C'),alpha=0.7) +
+  ylim(0,240)
+plot.imdb.nom <- ggplot(df,aes(imdbRating,Nominations))+
+  geom_point(color=I('#0000EE'),alpha=0.7)
+plot.tomato.win <-ggplot(df,aes(tomatoMeter,Wins))+
+  geom_point(color=I('#FF7F24'),alpha=0.7)
+plot.tomato.nom <- ggplot(df,aes(tomatoMeter,Nominations))+
+  geom_point(color=I('brown'),alpha=0.7)
+grid.arrange(plot.imdb.win,plot.imdb.nom,plot.tomato.win,plot.tomato.nom,nrow=2)
+```
+
+##Other Insights
+
+```{r}
+
+Top_Genres <- genre_df[order(genre_df$Numbers,decreasing = T),][1:9,'Type']
+df_q9 <- df[,c('imdbVotes','imdbRating',as.vector(Top_Genres))]
+df_q9 <- melt(df_q9,id=c('imdbVotes','imdbRating'))
+df_q9 <- df_q9[df_q9$value==1,]
+ggplot(df_q9,aes(imdbVotes,imdbRating)) +
+  geom_point(aes(color=variable)) +
+  facet_wrap('variable',nrow=3)+
+  scale_color_discrete(name = 'Genre')+
+  scale_x_continuous(breaks = c(500000,1000000,1500000),
+                     labels=c('0.5M','1M','1.5M'))
+
+```
+
+```{r}
+
+Friz.Freleng.Movie=vector(mode='numeric')
+for (i in seq(1,nrow(df))) {
+  directors=trimws(strsplit(df[i,'Director'],',')[[1]])
+  if('Friz Freleng' %in% directors)
+    Friz.Freleng.Movie=c(Friz.Freleng.Movie,i)
+}
+Friz.Freleng.df=df[Friz.Freleng.Movie,
+                   c('imdbRating',as.vector(genre_df$Type))]
+Friz.Freleng.df=melt(Friz.Freleng.df,id=c('imdbRating'))
+Friz.Freleng.df=Friz.Freleng.df[Friz.Freleng.df$value==1,]
+ggplot(Friz.Freleng.df,aes(variable,imdbRating))+
+  geom_boxplot(aes(color=variable)) +
+  coord_flip()+
+  xlab('Genre')+
+  scale_color_discrete(name = 'Genre')+
+  scale_y_continuous(limits = c(0,10),breaks = seq(0,10,2))+
+  ggtitle('imdbRating of Friz Freleng Director')
+```
+
+
+
+```{r}
+
+country_num <- function(x) {
+  if (x=='N/A')
+    return(NA)
+  else 
+    return(length(strsplit(x,',')[[1]]))
+}
+df$Country.Num <- sapply(df$Country,country_num)
+
+ggplot(df,aes(Country.Num,Gross)) +
+  geom_point(color=I('#FF6347'),alpha=0.7)
+```
+
+ 
+
